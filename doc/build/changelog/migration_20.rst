@@ -471,7 +471,7 @@ are subject to these errors, as would occur in the example below::
         id: int = Column(Integer, primary_key=True)
 
         # will raise
-        bars: list["Bar"] = relationship("Bar", back_populates="foo")
+        bars: List["Bar"] = relationship("Bar", back_populates="foo")
 
 
     class Bar(Base):
@@ -512,6 +512,7 @@ that descend from ``Base``::
 
     Base = declarative_base(cls=Base)
 
+
     # existing mapping proceeds, Declarative will ignore any annotations
     # which don't include ``Mapped[]``
     class Foo(Base):
@@ -519,7 +520,7 @@ that descend from ``Base``::
 
         id: int = Column(Integer, primary_key=True)
 
-        bars: list["Bar"] = relationship("Bar", back_populates="foo")
+        bars: List["Bar"] = relationship("Bar", back_populates="foo")
 
 
     class Bar(Base):
@@ -770,7 +771,7 @@ the ORM-level :meth:`_orm.Session.execute` method)::
         t = Table("t", metadata_obj, autoload_with=connection)
 
         # execute SQL statements
-        result = conn.execute(t.select())
+        result = connection.execute(t.select())
 
 **Discussion**
 
@@ -1522,6 +1523,9 @@ following the table, and may include additional notes not summarized here.
             select(func.count()).
             select_from(User)
           )
+
+          # or
+          
           session.scalar(
             select(func.count(User.id))
           )

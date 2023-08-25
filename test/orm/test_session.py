@@ -11,6 +11,7 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import insert
 from sqlalchemy import inspect
 from sqlalchemy import Integer
+from sqlalchemy import literal
 from sqlalchemy import select
 from sqlalchemy import Sequence
 from sqlalchemy import String
@@ -21,12 +22,15 @@ from sqlalchemy.orm import attributes
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import close_all_sessions
 from sqlalchemy.orm import exc as orm_exc
+from sqlalchemy.orm import immediateload
 from sqlalchemy.orm import make_transient
 from sqlalchemy.orm import make_transient_to_detached
 from sqlalchemy.orm import object_session
 from sqlalchemy.orm import relationship
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import subqueryload
 from sqlalchemy.orm import was_deleted
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
@@ -36,6 +40,7 @@ from sqlalchemy.testing import config
 from sqlalchemy.testing import engines
 from sqlalchemy.testing import eq_
 from sqlalchemy.testing import expect_raises_message
+from sqlalchemy.testing import expect_warnings
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
 from sqlalchemy.testing import is_false
@@ -108,7 +113,6 @@ class ExecutionTest(_fixtures.FixtureTest):
         )
 
     def test_no_string_execute(self, connection):
-
         with Session(bind=connection) as sess:
             with expect_raises_message(
                 sa.exc.ArgumentError,
@@ -242,7 +246,6 @@ class TransScopingTest(_fixtures.FixtureTest):
         self.mapper_registry.map_imperatively(Address, addresses)
 
         with Session(testing.db) as sess:
-
             sess.add(User(name="u1"))
             sess.commit()
 
@@ -2243,6 +2246,118 @@ class NewStyleExecutionTest(_fixtures.FixtureTest):
         is_true(inspect(u1).detached)
         is_(inspect(u1).session, None)
 
+    @testing.variation("construct", ["select", "update", "delete", "insert"])
+    def test_core_sql_w_embedded_orm(self, construct: testing.Variation):
+        """test #10098"""
+        user_table = self.tables.users
+
+        sess = fixture_session()
+
+        subq_1 = (
+            sess.query(user_table.c.id).where(
+                user_table.c.id == 10
+            )  # note user 10 exists but has no addresses, so
+            # this is significant for the test here
+            .scalar_subquery()
+        )
+
+        if construct.update:
+            stmt = (
+                user_table.update()
+                .values(name="xyz")
+                .where(user_table.c.id.in_(subq_1))
+            )
+        elif construct.delete:
+            stmt = user_table.delete().where(user_table.c.id.in_(subq_1))
+        elif construct.select:
+            stmt = select(user_table).where(user_table.c.id.in_(subq_1))
+        elif construct.insert:
+            stmt = insert(user_table).from_select(
+                ["id", "name"], select(subq_1 + 10, literal("xyz"))
+            )
+
+            # force the expected condition for INSERT; can't really get
+            # this to happen "naturally"
+            stmt._propagate_attrs = stmt._propagate_attrs.union(
+                {"compile_state_plugin": "orm", "plugin_subject": None}
+            )
+
+        else:
+            construct.fail()
+
+        # assert that the pre-condition we are specifically testing is
+        # present.  if the implementation changes then this would have
+        # to change also.
+        eq_(
+            stmt._propagate_attrs,
+            {"compile_state_plugin": "orm", "plugin_subject": None},
+        )
+
+        result = sess.execute(stmt)
+
+        if construct.select:
+            result.all()
+
+    @testing.combinations(
+        selectinload,
+        immediateload,
+        subqueryload,
+        argnames="loader_fn",
+    )
+    @testing.variation("opt_location", ["statement", "execute"])
+    def test_eagerloader_exec_option(
+        self, loader_fn, connection, opt_location
+    ):
+        User = self.classes.User
+
+        catch_opts = []
+
+        @event.listens_for(connection, "before_cursor_execute")
+        def before_cursor_execute(
+            conn, cursor, statement, parameters, context, executemany
+        ):
+            catch_opts.append(
+                {
+                    k: v
+                    for k, v in context.execution_options.items()
+                    if isinstance(k, str)
+                    and k[0] != "_"
+                    and k not in ("sa_top_level_orm_context",)
+                }
+            )
+
+        sess = Session(connection)
+
+        stmt = select(User).options(loader_fn(User.addresses))
+
+        if opt_location.execute:
+            opts = {
+                "compiled_cache": None,
+                "user_defined": "opt1",
+                "schema_translate_map": {"foo": "bar"},
+            }
+            result = sess.scalars(
+                stmt,
+                execution_options=opts,
+            )
+        elif opt_location.statement:
+            opts = {
+                "user_defined": "opt1",
+                "schema_translate_map": {"foo": "bar"},
+            }
+            stmt = stmt.execution_options(**opts)
+            result = sess.scalars(stmt)
+        else:
+            result = ()
+            opts = None
+            opt_location.fail()
+
+        for u1 in result:
+            u1.addresses
+
+        for elem in catch_opts:
+            eq_(elem, opts)
+
 
 class FlushWarningsTest(fixtures.MappedTest):
     run_setup_mappers = "each"
@@ -2293,13 +2408,13 @@ class FlushWarningsTest(fixtures.MappedTest):
         def evt(mapper, conn, instance):
             instance.addresses.append(Address(email="x1"))
 
-        self._test(evt, "collection append")
+        self._test(evt, "collection append", "related attribute set")
 
     def test_o2m_cascade_remove(self):
         def evt(mapper, conn, instance):
             del instance.addresses[0]
 
-        self._test(evt, "collection remove")
+        self._test(evt, "collection remove", "related attribute set")
 
     def test_m2o_cascade_add(self):
         User = self.classes.User
@@ -2308,14 +2423,19 @@ class FlushWarningsTest(fixtures.MappedTest):
             instance.addresses[0].user = User(name="u2")
 
         with expect_raises_message(orm_exc.FlushError, ".*Over 100"):
-            self._test(evt, "related attribute set")
+            self._test(
+                evt,
+                "related attribute set",
+                "collection remove",
+                "collection append",
+            )
 
     def test_m2o_cascade_remove(self):
         def evt(mapper, conn, instance):
             a1 = instance.addresses[0]
             del a1.user
 
-        self._test(evt, "related attribute delete")
+        self._test(evt, "related attribute delete", "collection remove")
 
     def test_plain_add(self):
         Address = self.classes.Address
@@ -2344,7 +2464,7 @@ class FlushWarningsTest(fixtures.MappedTest):
         ):
             self._test(evt, r"Session.delete\(\)")
 
-    def _test(self, fn, method):
+    def _test(self, fn, *methods):
         User = self.classes.User
         Address = self.classes.Address
 
@@ -2353,6 +2473,8 @@ class FlushWarningsTest(fixtures.MappedTest):
 
         u1 = User(name="u1", addresses=[Address(name="a1")])
         s.add(u1)
-        assert_warns_message(
-            sa.exc.SAWarning, "Usage of the '%s'" % method, s.commit
-        )
+
+        with expect_warnings(
+            *[f"Usage of the '{method}'" for method in methods]
+        ):
+            s.commit()

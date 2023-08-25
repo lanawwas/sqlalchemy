@@ -27,6 +27,7 @@ which we will be querying from the database.  This structure, known as a
 Python object model, as well as :term:`database metadata` that describes
 real SQL tables that exist, or will exist, in a particular database::
 
+    >>> from typing import List
     >>> from typing import Optional
     >>> from sqlalchemy import ForeignKey
     >>> from sqlalchemy import String
@@ -45,7 +46,7 @@ real SQL tables that exist, or will exist, in a particular database::
     ...     name: Mapped[str] = mapped_column(String(30))
     ...     fullname: Mapped[Optional[str]]
     ...
-    ...     addresses: Mapped[list["Address"]] = relationship(
+    ...     addresses: Mapped[List["Address"]] = relationship(
     ...         back_populates="user", cascade="all, delete-orphan"
     ...     )
     ...
@@ -200,7 +201,6 @@ is used:
     >>> from sqlalchemy.orm import Session
 
     >>> with Session(engine) as session:
-    ...
     ...     spongebob = User(
     ...         name="spongebob",
     ...         fullname="Spongebob Squarepants",
@@ -220,10 +220,18 @@ is used:
     ...
     ...     session.commit()
     {execsql}BEGIN (implicit)
-    INSERT INTO user_account (name, fullname) VALUES (?, ?), (?, ?), (?, ?) RETURNING id
-    [...] ('spongebob', 'Spongebob Squarepants', 'sandy', 'Sandy Cheeks', 'patrick', 'Patrick Star')
-    INSERT INTO address (email_address, user_id) VALUES (?, ?), (?, ?), (?, ?) RETURNING id
-    [...] ('spongebob@sqlalchemy.org', 1, 'sandy@sqlalchemy.org', 2, 'sandy@squirrelpower.org', 2)
+    INSERT INTO user_account (name, fullname) VALUES (?, ?) RETURNING id
+    [...] ('spongebob', 'Spongebob Squarepants')
+    INSERT INTO user_account (name, fullname) VALUES (?, ?) RETURNING id
+    [...] ('sandy', 'Sandy Cheeks')
+    INSERT INTO user_account (name, fullname) VALUES (?, ?) RETURNING id
+    [...] ('patrick', 'Patrick Star')
+    INSERT INTO address (email_address, user_id) VALUES (?, ?) RETURNING id
+    [...] ('spongebob@sqlalchemy.org', 1)
+    INSERT INTO address (email_address, user_id) VALUES (?, ?) RETURNING id
+    [...] ('sandy@sqlalchemy.org', 2)
+    INSERT INTO address (email_address, user_id) VALUES (?, ?) RETURNING id
+    [...] ('sandy@squirrelpower.org', 2)
     COMMIT
 
 

@@ -14,8 +14,211 @@ This document details individual issue-level changes made throughout
 
 
 .. changelog::
-    :version: 1.4.47
+    :version: 1.4.50
     :include_notes_from: unreleased_14
+
+.. changelog::
+    :version: 1.4.49
+    :released: July 5, 2023
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 10042
+        :versions: 2.0.18
+
+        Fixed issue where the :meth:`_sql.ColumnOperators.regexp_match`
+        when using "flags" would not produce a "stable" cache key, that
+        is, the cache key would keep changing each time causing cache pollution.
+        The same issue existed for :meth:`_sql.ColumnOperators.regexp_replace`
+        with both the flags and the actual replacement expression.
+        The flags are now represented as fixed modifier strings rendered as
+        safestrings rather than bound parameters, and the replacement
+        expression is established within the primary portion of the "binary"
+        element so that it generates an appropriate cache key.
+
+        Note that as part of this change, the
+        :paramref:`_sql.ColumnOperators.regexp_match.flags` and
+        :paramref:`_sql.ColumnOperators.regexp_replace.flags` have been modified to
+        render as literal strings only, whereas previously they were rendered as
+        full SQL expressions, typically bound parameters.   These parameters should
+        always be passed as plain Python strings and not as SQL expression
+        constructs; it's not expected that SQL expression constructs were used in
+        practice for this parameter, so this is a backwards-incompatible change.
+
+        The change also modifies the internal structure of the expression
+        generated, for :meth:`_sql.ColumnOperators.regexp_replace` with or without
+        flags, and for :meth:`_sql.ColumnOperators.regexp_match` with flags. Third
+        party dialects which may have implemented regexp implementations of their
+        own (no such dialects could be located in a search, so impact is expected
+        to be low) would need to adjust the traversal of the structure to
+        accommodate.
+
+
+    .. change::
+        :tags: bug, sql
+        :versions: 2.0.18
+
+        Fixed issue in mostly-internal :class:`.CacheKey` construct where the
+        ``__ne__()`` operator were not properly implemented, leading to nonsensical
+        results when comparing :class:`.CacheKey` instances to each other.
+
+
+
+
+    .. change::
+        :tags: bug, extensions
+        :versions: 2.0.17
+
+        Fixed issue in mypy plugin for use with mypy 1.4.
+
+    .. change::
+        :tags: platform, usecase
+
+        Compatibility improvements to work fully with Python 3.12
+
+.. changelog::
+    :version: 1.4.48
+    :released: April 30, 2023
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 9728
+        :versions: 2.0.12
+
+        Fixed critical caching issue where the combination of
+        :func:`_orm.aliased()` and :func:`_hybrid.hybrid_property` expression
+        compositions would cause a cache key mismatch, leading to cache keys that
+        held onto the actual :func:`_orm.aliased` object while also not matching
+        that of equivalent constructs, filling up the cache.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 9634
+        :versions: 2.0.10
+
+        Fixed bug where various ORM-specific getters such as
+        :attr:`.ORMExecuteState.is_column_load`,
+        :attr:`.ORMExecuteState.is_relationship_load`,
+        :attr:`.ORMExecuteState.loader_strategy_path` etc. would throw an
+        ``AttributeError`` if the SQL statement itself were a "compound select"
+        such as a UNION.
+
+    .. change::
+        :tags: bug, orm
+        :tickets: 9590
+        :versions: 2.0.9
+
+        Fixed endless loop which could occur when using "relationship to aliased
+        class" feature and also indicating a recursive eager loader such as
+        ``lazy="selectinload"`` in the loader, in combination with another eager
+        loader on the opposite side. The check for cycles has been fixed to include
+        aliased class relationships.
+
+.. changelog::
+    :version: 1.4.47
+    :released: March 18, 2023
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 9075
+        :versions: 2.0.0rc3
+
+        Fixed bug / regression where using :func:`.bindparam()` with the same name
+        as a column in the :meth:`.Update.values` method of :class:`.Update`, as
+        well as the :meth:`_dml.Insert.values` method of :class:`_dml.Insert` in 2.0 only,
+        would in some cases silently fail to honor the SQL expression in which the
+        parameter were presented, replacing the expression with a new parameter of
+        the same name and discarding any other elements of the SQL expression, such
+        as SQL functions, etc. The specific case would be statements that were
+        constructed against ORM entities rather than plain :class:`.Table`
+        instances, but would occur if the statement were invoked with a
+        :class:`.Session` or a :class:`.Connection`.
+
+        :class:`.Update` part of the issue was present in both 2.0 and 1.4 and is
+        backported to 1.4.
+
+    .. change::
+        :tags: bug, oracle
+        :tickets: 5047
+
+        Added :class:`_oracle.ROWID` to reflected types as this type may be used in
+        a "CREATE TABLE" statement.
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 7664
+
+        Fixed stringify for a the :class:`.CreateSchema` and :class:`.DropSchema`
+        DDL constructs, which would fail with an ``AttributeError`` when
+        stringified without a dialect.
+
+
+    .. change::
+        :tags: usecase, mysql
+        :tickets: 9047
+        :versions: 2.0.0
+
+        Added support to MySQL index reflection to correctly reflect the
+        ``mysql_length`` dictionary, which previously was being ignored.
+
+    .. change::
+        :tags: bug, postgresql
+        :tickets: 9048
+        :versions: 2.0.0
+
+        Added support to the asyncpg dialect to return the ``cursor.rowcount``
+        value for SELECT statements when available. While this is not a typical use
+        for ``cursor.rowcount``, the other PostgreSQL dialects generally provide
+        this value. Pull request courtesy Michael Gorven.
+
+    .. change::
+        :tags: bug, mssql
+        :tickets: 9133
+
+        Fixed bug where a schema name given with brackets, but no dots inside the
+        name, for parameters such as :paramref:`_schema.Table.schema` would not be
+        interpreted within the context of the SQL Server dialect's documented
+        behavior of interpreting explicit brackets as token delimiters, first added
+        in 1.2 for #2626, when referring to the schema name in reflection
+        operations. The original assumption for #2626's behavior was that the
+        special interpretation of brackets was only significant if dots were
+        present, however in practice, the brackets are not included as part of the
+        identifier name for all SQL rendering operations since these are not valid
+        characters within regular or delimited identifiers.  Pull request courtesy
+        Shan.
+
+
+    .. change::
+        :tags: bug, mypy
+        :versions: 2.0.0rc3
+
+        Adjustments made to the mypy plugin to accommodate for some potential
+        changes being made for issue #236 sqlalchemy2-stubs when using SQLAlchemy
+        1.4. These changes are being kept in sync within SQLAlchemy 2.0.
+        The changes are also backwards compatible with older versions of
+        sqlalchemy2-stubs.
+
+
+    .. change::
+        :tags: bug, mypy
+        :tickets: 9102
+        :versions: 2.0.0rc3
+
+        Fixed crash in mypy plugin which could occur on both 1.4 and 2.0 versions
+        if a decorator for the :func:`_orm.registry.mapped` decorator were used
+        that was referenced in an expression with more than two components (e.g.
+        ``@Backend.mapper_registry.mapped``). This scenario is now ignored; when
+        using the plugin, the decorator expression needs to be two components (i.e.
+        ``@reg.mapped``).
+
+    .. change::
+        :tags: bug, sql
+        :tickets: 9506
+
+        Fixed critical SQL caching issue where use of the
+        :meth:`_sql.Operators.op` custom operator function would not produce an appropriate
+        cache key, leading to reduce the effectiveness of the SQL cache.
+
 
 .. changelog::
     :version: 1.4.46

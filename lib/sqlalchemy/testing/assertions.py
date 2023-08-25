@@ -47,7 +47,7 @@ def expect_warnings(*messages, **kw):
     Note that the test suite sets SAWarning warnings to raise exceptions.
 
     """  # noqa
-    return _expect_warnings(sa_exc.SAWarning, messages, **kw)
+    return _expect_warnings_sqla_only(sa_exc.SAWarning, messages, **kw)
 
 
 @contextlib.contextmanager
@@ -84,11 +84,15 @@ def emits_warning(*messages):
 
 
 def expect_deprecated(*messages, **kw):
-    return _expect_warnings(sa_exc.SADeprecationWarning, messages, **kw)
+    return _expect_warnings_sqla_only(
+        sa_exc.SADeprecationWarning, messages, **kw
+    )
 
 
 def expect_deprecated_20(*messages, **kw):
-    return _expect_warnings(sa_exc.Base20DeprecationWarning, messages, **kw)
+    return _expect_warnings_sqla_only(
+        sa_exc.Base20DeprecationWarning, messages, **kw
+    )
 
 
 def emits_warning_on(db, *messages):
@@ -140,6 +144,29 @@ _SEEN = None
 _EXC_CLS = None
 
 
+def _expect_warnings_sqla_only(
+    exc_cls,
+    messages,
+    regex=True,
+    search_msg=False,
+    assert_=True,
+):
+    """SQLAlchemy internal use only _expect_warnings().
+
+    Alembic is using _expect_warnings() directly, and should be updated
+    to use this new interface.
+
+    """
+    return _expect_warnings(
+        exc_cls,
+        messages,
+        regex=regex,
+        search_msg=search_msg,
+        assert_=assert_,
+        raise_on_any_unexpected=True,
+    )
+
+
 @contextlib.contextmanager
 def _expect_warnings(
     exc_cls,
@@ -150,7 +177,6 @@ def _expect_warnings(
     raise_on_any_unexpected=False,
     squelch_other_warnings=False,
 ):
-
     global _FILTERS, _SEEN, _EXC_CLS
 
     if regex or search_msg:
@@ -181,7 +207,6 @@ def _expect_warnings(
             real_warn = warnings.warn
 
         def our_warn(msg, *arg, **kw):
-
             if isinstance(msg, _EXC_CLS):
                 exception = type(msg)
                 msg = str(msg)
@@ -327,8 +352,10 @@ def startswith_(a, fragment, msg=None):
 def eq_ignore_whitespace(a, b, msg=None):
     a = re.sub(r"^\s+?|\n", "", a)
     a = re.sub(r" {2,}", " ", a)
+    a = re.sub(r"\t", "", a)
     b = re.sub(r"^\s+?|\n", "", b)
     b = re.sub(r" {2,}", " ", b)
+    b = re.sub(r"\t", "", b)
 
     assert a == b, msg or "%r != %r" % (a, b)
 
@@ -377,7 +404,7 @@ def assert_warns(except_cls, callable_, *args, **kwargs):
 
 
     """
-    with _expect_warnings(except_cls, [".*"], squelch_other_warnings=True):
+    with _expect_warnings_sqla_only(except_cls, [".*"]):
         return callable_(*args, **kwargs)
 
 
@@ -392,12 +419,11 @@ def assert_warns_message(except_cls, msg, callable_, *args, **kwargs):
     rather than regex.match().
 
     """
-    with _expect_warnings(
+    with _expect_warnings_sqla_only(
         except_cls,
         [msg],
         search_msg=True,
         regex=False,
-        squelch_other_warnings=True,
     ):
         return callable_(*args, **kwargs)
 
@@ -411,7 +437,6 @@ def assert_raises_message_context_ok(
 def _assert_raises(
     except_cls, callable_, args, kwargs, msg=None, check_context=False
 ):
-
     with _expect_raises(except_cls, msg, check_context) as ec:
         callable_(*args, **kwargs)
     return ec.error
@@ -496,6 +521,7 @@ class AssertsCompiledSQL:
         default_schema_name=None,
         from_linting=False,
         check_param_order=True,
+        use_literal_execute_for_simple_int=False,
     ):
         if use_default_dialect:
             dialect = default.DefaultDialect()
@@ -538,6 +564,9 @@ class AssertsCompiledSQL:
 
         if render_postcompile:
             compile_kwargs["render_postcompile"] = True
+
+        if use_literal_execute_for_simple_int:
+            compile_kwargs["use_literal_execute_for_simple_int"] = True
 
         if for_executemany:
             kw["for_executemany"] = True
@@ -886,7 +915,6 @@ class AssertsExecutionResults:
         return result
 
     def assert_sql(self, db, callable_, rules):
-
         newrules = []
         for rule in rules:
             if isinstance(rule, dict):
@@ -904,21 +932,6 @@ class AssertsExecutionResults:
             db, callable_, assertsql.CountStatements(count)
         )
 
-    def assert_multiple_sql_count(self, dbs, callable_, counts):
-        recs = [
-            (self.sql_execution_asserter(db), db, count)
-            for (db, count) in zip(dbs, counts)
-        ]
-        asserters = []
-        for ctx, db, count in recs:
-            asserters.append(ctx.__enter__())
-        try:
-            return callable_()
-        finally:
-            for asserter, (ctx, db, count) in zip(asserters, recs):
-                ctx.__exit__(None, None, None)
-                asserter.assert_(assertsql.CountStatements(count))
-
     @contextlib.contextmanager
     def assert_execution(self, db, *rules):
         with self.sql_execution_asserter(db) as asserter:
@@ -927,6 +940,22 @@ class AssertsExecutionResults:
 
     def assert_statement_count(self, db, count):
         return self.assert_execution(db, assertsql.CountStatements(count))
+
+    @contextlib.contextmanager
+    def assert_statement_count_multi_db(self, dbs, counts):
+        recs = [
+            (self.sql_execution_asserter(db), db, count)
+            for (db, count) in zip(dbs, counts)
+        ]
+        asserters = []
+        for ctx, db, count in recs:
+            asserters.append(ctx.__enter__())
+        try:
+            yield
+        finally:
+            for asserter, (ctx, db, count) in zip(asserters, recs):
+                ctx.__exit__(None, None, None)
+                asserter.assert_(assertsql.CountStatements(count))
 
 
 class ComparesIndexes:

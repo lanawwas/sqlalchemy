@@ -5,7 +5,6 @@ from sqlalchemy import FLOAT
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
 from sqlalchemy import ForeignKeyConstraint
-from sqlalchemy import func
 from sqlalchemy import Identity
 from sqlalchemy import Index
 from sqlalchemy import inspect
@@ -26,7 +25,9 @@ from sqlalchemy.dialects.oracle.base import BINARY_DOUBLE
 from sqlalchemy.dialects.oracle.base import BINARY_FLOAT
 from sqlalchemy.dialects.oracle.base import DOUBLE_PRECISION
 from sqlalchemy.dialects.oracle.base import NUMBER
+from sqlalchemy.dialects.oracle.base import RAW
 from sqlalchemy.dialects.oracle.base import REAL
+from sqlalchemy.dialects.oracle.base import ROWID
 from sqlalchemy.dialects.oracle.types import NVARCHAR2
 from sqlalchemy.dialects.oracle.types import VARCHAR2
 from sqlalchemy.engine import ObjectKind
@@ -347,7 +348,6 @@ class MultiSchemaTest(fixtures.TestBase, AssertsCompiledSQL):
 
 
 class ConstraintTest(AssertsCompiledSQL, fixtures.TestBase):
-
     __only_on__ = "oracle"
     __backend__ = True
 
@@ -360,7 +360,6 @@ class ConstraintTest(AssertsCompiledSQL, fixtures.TestBase):
     def test_oracle_has_no_on_update_cascade(
         self, metadata, connection, plain_foo_table
     ):
-
         bar = Table(
             "bar",
             metadata,
@@ -383,7 +382,6 @@ class ConstraintTest(AssertsCompiledSQL, fixtures.TestBase):
     def test_reflect_check_include_all(
         self, metadata, connection, plain_foo_table
     ):
-
         insp = inspect(connection)
         eq_(insp.get_check_constraints("foo"), [])
         eq_(
@@ -544,7 +542,6 @@ class SystemTableTablenamesTest(fixtures.TestBase):
     __backend__ = True
 
     def setup_test(self):
-
         with testing.db.begin() as conn:
             conn.exec_driver_sql("create table my_table (id integer)")
             conn.exec_driver_sql(
@@ -648,7 +645,6 @@ class TableReflectionTest(fixtures.TestBase):
 
     @testing.fails_if(all_tables_compression_missing)
     def test_reflect_basic_compression(self, metadata, connection):
-
         tbl = Table(
             "test_compress",
             metadata,
@@ -939,7 +935,6 @@ class RoundTripIndexTest(fixtures.TestBase):
     def test_include_indexes_resembling_pk(
         self, metadata, connection, explicit_pk
     ):
-
         t = Table(
             "sometable",
             metadata,
@@ -980,39 +975,111 @@ class RoundTripIndexTest(fixtures.TestBase):
         )
 
     def test_reflect_fn_index(self, metadata, connection):
-        """test reflection of a functional index.
+        """test reflection of a functional index."""
 
-        it appears this emitted a warning at some point but does not right now.
-        the returned data is not exactly correct, but this is what it's
-        likely been doing for many years.
+        Table(
+            "sometable",
+            metadata,
+            Column("group", Unicode(255)),
+            Column("col", Unicode(255)),
+            Column("other", Unicode(255), index=True),
+        )
+        metadata.create_all(connection)
+        connection.exec_driver_sql(
+            """create index idx3 on sometable(
+                lower("group"), other, upper(other))"""
+        )
+        connection.exec_driver_sql(
+            """create index idx1 on sometable
+            (("group" || col), col || other desc)"""
+        )
+        connection.exec_driver_sql(
+            """
+            create unique index idx2 on sometable
+                (col desc, lower(other), "group" asc)
+            """
+        )
 
-        """
+        expected = [
+            {
+                "name": "idx1",
+                "column_names": [None, None],
+                "expressions": ['"group"||"COL"', '"COL"||"OTHER"'],
+                "unique": False,
+                "dialect_options": {},
+                "column_sorting": {'"COL"||"OTHER"': ("desc",)},
+            },
+            {
+                "name": "idx2",
+                "column_names": [None, None, "group"],
+                "expressions": ['"COL"', 'LOWER("OTHER")', "group"],
+                "unique": True,
+                "column_sorting": {'"COL"': ("desc",)},
+                "dialect_options": {},
+            },
+            {
+                "name": "idx3",
+                "column_names": [None, "other", None],
+                "expressions": [
+                    'LOWER("group")',
+                    "other",
+                    'UPPER("OTHER")',
+                ],
+                "unique": False,
+                "dialect_options": {},
+            },
+            {
+                "name": "ix_sometable_other",
+                "column_names": ["other"],
+                "unique": False,
+                "dialect_options": {},
+            },
+        ]
 
+        eq_(inspect(connection).get_indexes("sometable"), expected)
+
+    def test_indexes_asc_desc(self, metadata, connection):
         s_table = Table(
             "sometable",
             metadata,
-            Column("group", Unicode(255), primary_key=True),
+            Column("a", Unicode(255), primary_key=True),
+            Column("b", Unicode(255)),
+            Column("group", Unicode(255)),
             Column("col", Unicode(255)),
         )
-
-        Index("data_idx", func.upper(s_table.c.col))
+        Index("id1", s_table.c.b.asc())
+        Index("id2", s_table.c.col.desc())
+        Index("id3", s_table.c.b.asc(), s_table.c.group.desc())
 
         metadata.create_all(connection)
 
-        eq_(
-            inspect(connection).get_indexes("sometable"),
-            [
-                {
-                    "column_names": [],
-                    "dialect_options": {},
-                    "name": "data_idx",
-                    "unique": False,
-                }
-            ],
-        )
+        expected = [
+            {
+                "name": "id1",
+                "column_names": ["b"],
+                "unique": False,
+                "dialect_options": {},
+            },
+            {
+                "name": "id2",
+                "column_names": [None],
+                "expressions": ['"COL"'],
+                "unique": False,
+                "column_sorting": {'"COL"': ("desc",)},
+                "dialect_options": {},
+            },
+            {
+                "name": "id3",
+                "column_names": ["b", None],
+                "expressions": ["b", '"group"'],
+                "unique": False,
+                "column_sorting": {'"group"': ("desc",)},
+                "dialect_options": {},
+            },
+        ]
+        eq_(inspect(connection).get_indexes("sometable"), expected)
 
     def test_basic(self, metadata, connection):
-
         s_table = Table(
             "sometable",
             metadata,
@@ -1231,6 +1298,17 @@ class TypeReflectionTest(fixtures.TestBase):
             (NCHAR(42), NCHAR(42)),
         ]
         self._run_test(metadata, connection, specs, ["length"])
+
+    @testing.combinations(ROWID(), RAW(1), argnames="type_")
+    def test_misc_types(self, metadata, connection, type_):
+        t = Table("t1", metadata, Column("x", type_))
+
+        t.create(connection)
+
+        eq_(
+            inspect(connection).get_columns("t1")[0]["type"]._type_affinity,
+            type_._type_affinity,
+        )
 
 
 class IdentityReflectionTest(fixtures.TablesTest):
@@ -1584,3 +1662,120 @@ drop table %(schema)sparent;
             connection.exec_driver_sql("DROP SYNONYM s1")
             connection.exec_driver_sql("DROP SYNONYM s2")
             connection.exec_driver_sql("DROP SYNONYM s3")
+
+    @testing.fixture
+    def public_synonym_fixture(self, connection):
+        foo_syn = f"foo_syn_{config.ident}"
+
+        connection.exec_driver_sql("CREATE TABLE foobar (id integer)")
+
+        try:
+            connection.exec_driver_sql(
+                f"CREATE PUBLIC SYNONYM {foo_syn} for foobar"
+            )
+        except:
+            # assume the synonym exists is the main problem here.
+            # since --dropfirst will not get this synonym, drop it directly
+            # for the next run.
+            try:
+                connection.exec_driver_sql(f"DROP PUBLIC SYNONYM {foo_syn}")
+            except:
+                pass
+
+            raise
+
+        try:
+            yield foo_syn
+        finally:
+            try:
+                connection.exec_driver_sql(f"DROP PUBLIC SYNONYM {foo_syn}")
+            except:
+                pass
+            try:
+                connection.exec_driver_sql("DROP TABLE foobar")
+            except:
+                pass
+
+    @testing.variation(
+        "case_convention", ["uppercase", "lowercase", "mixedcase"]
+    )
+    def test_public_synonym_fetch(
+        self,
+        connection,
+        public_synonym_fixture,
+        case_convention: testing.Variation,
+    ):
+        """test #9459"""
+
+        foo_syn = public_synonym_fixture
+
+        if case_convention.uppercase:
+            public = "PUBLIC"
+        elif case_convention.lowercase:
+            public = "public"
+        elif case_convention.mixedcase:
+            public = "Public"
+        else:
+            case_convention.fail()
+
+        syns = connection.dialect._get_synonyms(connection, public, None, None)
+
+        if case_convention.mixedcase:
+            assert not syns
+            return
+
+        syns_by_name = {syn["synonym_name"]: syn for syn in syns}
+        eq_(
+            syns_by_name[foo_syn.upper()],
+            {
+                "synonym_name": foo_syn.upper(),
+                "table_name": "FOOBAR",
+                "table_owner": connection.dialect.default_schema_name.upper(),
+                "db_link": None,
+            },
+        )
+
+    @testing.variation(
+        "case_convention", ["uppercase", "lowercase", "mixedcase"]
+    )
+    def test_public_synonym_resolve_table(
+        self,
+        connection,
+        public_synonym_fixture,
+        case_convention: testing.Variation,
+    ):
+        """test #9459"""
+
+        foo_syn = public_synonym_fixture
+
+        if case_convention.uppercase:
+            public = "PUBLIC"
+        elif case_convention.lowercase:
+            public = "public"
+        elif case_convention.mixedcase:
+            public = "Public"
+        else:
+            case_convention.fail()
+
+        if case_convention.mixedcase:
+            with expect_raises(exc.NoSuchTableError):
+                cols = inspect(connection).get_columns(
+                    foo_syn, schema=public, oracle_resolve_synonyms=True
+                )
+        else:
+            cols = inspect(connection).get_columns(
+                foo_syn, schema=public, oracle_resolve_synonyms=True
+            )
+
+            eq_(
+                cols,
+                [
+                    {
+                        "name": "id",
+                        "type": testing.eq_type_affinity(INTEGER),
+                        "nullable": True,
+                        "default": None,
+                        "comment": None,
+                    }
+                ],
+            )

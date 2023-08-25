@@ -24,6 +24,7 @@ import sys
 import textwrap
 import threading
 import types
+from types import CodeType
 from typing import Any
 from typing import Callable
 from typing import cast
@@ -289,6 +290,9 @@ def %(name)s%(grouped_args)s:
 """
                 % metadata
             )
+
+        mod = sys.modules[fn.__module__]
+        env.update(vars(mod))
         env.update({targ_name: target, fn_name: fn, "__name__": fn.__module__})
 
         decorated = cast(
@@ -1157,7 +1161,6 @@ class _memoized_property(generic_fn_descriptor[_T_co]):
 # additional issues, RO properties:
 # https://github.com/python/mypy/issues/12440
 if TYPE_CHECKING:
-
     # allow memoized and non-memoized to be freely mixed by having them
     # be the same class
     memoized_property = generic_fn_descriptor
@@ -1239,7 +1242,7 @@ class HasMemoized:
             self.__doc__ = doc or fget.__doc__
             self.__name__ = fget.__name__
 
-        @overload
+        @overload  # type: ignore[override]
         def __get__(self: _MA, obj: None, cls: Any) -> _MA:
             ...
 
@@ -1633,7 +1636,7 @@ class symbol(int):
             else:
                 if canonical and canonical != sym:
                     raise TypeError(
-                        f"Can't replace canonical symbol for {name} "
+                        f"Can't replace canonical symbol for {name!r} "
                         f"with new int value {canonical}"
                     )
             return sym
@@ -1825,6 +1828,19 @@ def warn_limited(msg: str, args: Sequence[Any]) -> None:
     _warnings_warn(msg, exc.SAWarning)
 
 
+_warning_tags: Dict[CodeType, Tuple[str, Type[Warning]]] = {}
+
+
+def tag_method_for_warnings(
+    message: str, category: Type[Warning]
+) -> Callable[[_F], _F]:
+    def go(fn):
+        _warning_tags[fn.__code__] = (message, category)
+        return fn
+
+    return go
+
+
 _not_sa_pattern = re.compile(r"^(?:sqlalchemy\.(?!testing)|alembic\.)")
 
 
@@ -1833,7 +1849,6 @@ def _warnings_warn(
     category: Optional[Type[Warning]] = None,
     stacklevel: int = 2,
 ) -> None:
-
     # adjust the given stacklevel to be outside of SQLAlchemy
     try:
         frame = sys._getframe(stacklevel)
@@ -1846,14 +1861,33 @@ def _warnings_warn(
         # ok, but don't crash
         stacklevel = 0
     else:
-        # using __name__ here requires that we have __name__ in the
-        # __globals__ of the decorated string functions we make also.
-        # we generate this using {"__name__": fn.__module__}
-        while frame is not None and re.match(
-            _not_sa_pattern, frame.f_globals.get("__name__", "")
-        ):
+        stacklevel_found = warning_tag_found = False
+        while frame is not None:
+            # using __name__ here requires that we have __name__ in the
+            # __globals__ of the decorated string functions we make also.
+            # we generate this using {"__name__": fn.__module__}
+            if not stacklevel_found and not re.match(
+                _not_sa_pattern, frame.f_globals.get("__name__", "")
+            ):
+                # stop incrementing stack level if an out-of-SQLA line
+                # were found.
+                stacklevel_found = True
+
+                # however, for the warning tag thing, we have to keep
+                # scanning up the whole traceback
+
+            if frame.f_code in _warning_tags:
+                warning_tag_found = True
+                (_suffix, _category) = _warning_tags[frame.f_code]
+                category = category or _category
+                message = f"{message} ({_suffix})"
+
             frame = frame.f_back  # type: ignore[assignment]
-            stacklevel += 1
+
+            if not stacklevel_found:
+                stacklevel += 1
+            elif stacklevel_found and warning_tag_found:
+                break
 
     if category is not None:
         warnings.warn(message, category, stacklevel=stacklevel + 1)

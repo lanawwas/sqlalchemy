@@ -21,6 +21,7 @@ from sqlalchemy import ForeignKeyConstraint
 from sqlalchemy import func
 from sqlalchemy import Identity
 from sqlalchemy import Index
+from sqlalchemy import insert_sentinel
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import Numeric
@@ -38,6 +39,8 @@ from sqlalchemy import types as sqltypes
 from sqlalchemy import Unicode
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.engine import default
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.ext.compiler import deregister
 from sqlalchemy.schema import AddConstraint
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import DefaultClause
@@ -46,6 +49,7 @@ from sqlalchemy.sql import naming
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.base import _NONE_NAME
 from sqlalchemy.sql.elements import literal_column
+from sqlalchemy.sql.schema import _InsertSentinelColumnDefault
 from sqlalchemy.sql.schema import RETAIN_SCHEMA
 from sqlalchemy.testing import assert_raises
 from sqlalchemy.testing import assert_raises_message
@@ -53,6 +57,7 @@ from sqlalchemy.testing import AssertsCompiledSQL
 from sqlalchemy.testing import ComparesTables
 from sqlalchemy.testing import emits_warning
 from sqlalchemy.testing import eq_
+from sqlalchemy.testing import eq_ignore_whitespace
 from sqlalchemy.testing import expect_raises_message
 from sqlalchemy.testing import fixtures
 from sqlalchemy.testing import is_
@@ -91,6 +96,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
                 Sequence("foo_seq"),
                 primary_key=True,
                 key="bar",
+                autoincrement="ignore_fk",
             ),
             Column(Integer(), ForeignKey("bat.blah"), doc="this is a col"),
             Column(
@@ -98,6 +104,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
                 Integer(),
                 ForeignKey("bat.blah"),
                 primary_key=True,
+                comment="this is a comment",
                 key="bar",
             ),
             Column("bar", Integer(), info={"foo": "bar"}),
@@ -112,6 +119,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
                 "unique",
                 "info",
                 "doc",
+                "autoincrement",
             ):
                 eq_(getattr(col, attr), getattr(c2, attr))
             eq_(len(col.foreign_keys), len(c2.foreign_keys))
@@ -434,7 +442,6 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         )
 
     def test_fk_mismatched_local_remote_cols(self):
-
         assert_raises_message(
             exc.ArgumentError,
             "ForeignKeyConstraint number of constrained columns must "
@@ -615,7 +622,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         c.add_is_dependent_on(a)
         eq_(meta.sorted_tables, [d, b, a, c, e])
 
-    def test_deterministic_order(self):
+    def test_sort_by_parameter_order(self):
         meta = MetaData()
         a = Table("a", meta, Column("foo", Integer))
         b = Table("b", meta, Column("foo", Integer))
@@ -627,7 +634,7 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
         a.add_is_dependent_on(b)
         eq_(meta.sorted_tables, [b, c, d, a, e])
 
-    def test_fks_deterministic_order(self):
+    def test_fks_sort_by_parameter_order(self):
         meta = MetaData()
         a = Table("a", meta, Column("foo", Integer, ForeignKey("b.foo")))
         b = Table("b", meta, Column("foo", Integer))
@@ -776,6 +783,19 @@ class MetaDataTest(fixtures.TestBase, ComparesTables):
             ),
         ):
             eq_(repr(const), exp)
+
+    @testing.variation("kind", ["engine", "conn", "something"])
+    def test_metadata_bind(self, connection, kind):
+        with expect_raises_message(
+            exc.ArgumentError,
+            "expected schema argument to be a string, got",
+        ):
+            if kind.engine:
+                MetaData(connection.engine)
+            elif kind.conn:
+                MetaData(connection)
+            else:
+                MetaData(42)  # type: ignore
 
 
 class ToMetaDataTest(fixtures.TestBase, AssertsCompiledSQL, ComparesTables):
@@ -1497,7 +1517,6 @@ class ToMetaDataTest(fixtures.TestBase, AssertsCompiledSQL, ComparesTables):
 
     @emits_warning("Table '.+' already exists within the given MetaData")
     def test_already_exists(self):
-
         meta1 = MetaData()
         table1 = Table(
             "mytable", meta1, Column("myid", Integer, primary_key=True)
@@ -1759,7 +1778,6 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
         )
 
     def test_reset_exported_passes(self):
-
         m = MetaData()
 
         t = Table("t", m, Column("foo", Integer))
@@ -1938,7 +1956,6 @@ class TableTest(fixtures.TestBase, AssertsCompiledSQL):
             "Table 't' specifies columns 'a', 'b', 'c' as primary_key=True, "
             "not matching locally specified columns 'b', 'c'"
         ):
-
             Table(
                 "t",
                 m,
@@ -2271,7 +2288,6 @@ class SchemaTypeTest(fixtures.TestBase):
         self._test_before_parent_attach(typ)
 
     def test_before_parent_attach_variant_array_schematype(self):
-
         target = Enum("one", "two", "three")
         typ = ARRAY(target).with_variant(String(), "other")
         self._test_before_parent_attach(typ, evt_target=target)
@@ -2620,6 +2636,49 @@ class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):
         t2 = Table("t2", m, Column("x", Integer, ForeignKey("bar.t1.x")))
         assert t2.c.x.references(t1.c.x)
 
+    @testing.combinations(
+        (schema.CreateSchema("sa_schema"), "CREATE SCHEMA sa_schema"),
+        (schema.DropSchema("sa_schema"), "DROP SCHEMA sa_schema"),
+        # note we don't yet support lower-case table() or
+        # lower-case column() for this
+        # (
+        #    schema.CreateTable(table("t", column("q", Integer))),
+        #    "CREATE TABLE t (q INTEGER)",
+        # ),
+        (
+            schema.CreateTable(Table("t", MetaData(), Column("q", Integer))),
+            "CREATE TABLE t (q INTEGER)",
+        ),
+        (
+            schema.DropTable(Table("t", MetaData(), Column("q", Integer))),
+            "DROP TABLE t",
+        ),
+        (
+            schema.CreateIndex(
+                Index(
+                    "foo",
+                    "x",
+                    _table=Table("t", MetaData(), Column("x", Integer)),
+                )
+            ),
+            "CREATE INDEX foo ON t (x)",
+        ),
+        (
+            schema.DropIndex(
+                Index(
+                    "foo",
+                    "x",
+                    _table=Table("t", MetaData(), Column("x", Integer)),
+                )
+            ),
+            "DROP INDEX foo",
+        ),
+        (schema.CreateSequence(Sequence("my_seq")), "CREATE SEQUENCE my_seq"),
+        (schema.DropSequence(Sequence("my_seq")), "DROP SEQUENCE my_seq"),
+    )
+    def test_stringify_schema_elements(self, element, expected):
+        eq_ignore_whitespace(str(element), expected)
+
     def test_create_drop_schema(self):
         self.assert_compile(
             schema.CreateSchema("sa_schema"), "CREATE SCHEMA sa_schema"
@@ -2701,7 +2760,6 @@ class UseExistingTest(testing.AssertsCompiledSQL, fixtures.TablesTest):
     def test_table_w_two_same_named_columns(
         self, empty_meta, scenario: Variation, both_have_keys: Variation
     ):
-
         if scenario.inplace:
             with expect_raises_message(
                 exc.DuplicateColumnError,
@@ -3677,8 +3735,6 @@ class ConstraintTest(fixtures.TestBase):
         assert c in t.indexes
 
     def test_auto_append_lowercase_table(self):
-        from sqlalchemy import table, column
-
         t = table("t", column("a"))
         t2 = table("t2", column("a"))
         for c in (
@@ -4024,7 +4080,6 @@ class ConstraintTest(fixtures.TestBase):
         return t, ClauseElement(t.c.q)
 
     def test_pickle_fk_annotated_col(self, no_pickle_annotated):
-
         t, q_col = no_pickle_annotated
 
         t2 = Table("t2", t.metadata, Column("p", ForeignKey(q_col)))
@@ -4111,7 +4166,6 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
             assert col.name == c[i].name
 
     def test_name_none(self):
-
         c = Column(Integer)
         assert_raises_message(
             exc.ArgumentError,
@@ -4124,7 +4178,6 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
         )
 
     def test_name_blank(self):
-
         c = Column("", Integer)
         assert_raises_message(
             exc.ArgumentError,
@@ -4271,8 +4324,6 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
         )
 
     def test_custom_create(self):
-        from sqlalchemy.ext.compiler import compiles, deregister
-
         @compiles(schema.CreateColumn)
         def compile_(element, compiler, **kw):
             column = element.element
@@ -4337,7 +4388,6 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
         paramname,
         value,
     ):
-
         args = []
         params = {}
         if paramname == "type" or isinstance(
@@ -4452,7 +4502,6 @@ class ColumnDefinitionTest(AssertsCompiledSQL, fixtures.TestBase):
         value,
         override_value,
     ):
-
         args = []
         params = {}
         override_args = []
@@ -4654,7 +4703,6 @@ class ColumnOptionsTest(fixtures.TestBase):
         self._no_error(Column("foo", ForeignKey("bar.id"), Sequence("a")))
 
     def test_column_info(self):
-
         c1 = Column("foo", String, info={"x": "y"})
         c2 = Column("bar", String, info={})
         c3 = Column("bat", String)
@@ -6019,3 +6067,52 @@ class CopyDialectOptionsTest(fixtures.TestBase):
             m2 = MetaData()
             t2 = t1.to_metadata(m2)  # make a copy
             self.check_dialect_options_(t2)
+
+
+class SentinelColTest(fixtures.TestBase):
+    def make_table_w_sentinel_col(self, *arg, **kw):
+        return Table(
+            "t",
+            MetaData(),
+            Column("id", Integer, primary_key=True),
+            Column(*arg, **kw),
+        )
+
+    def test_only_one_sentinel(self):
+        with expect_raises_message(
+            exc.ArgumentError,
+            "a Table may have only one explicit sentinel column",
+        ):
+            Table(
+                "t",
+                MetaData(),
+                Column("id", Integer, primary_key=True, insert_sentinel=True),
+                Column("ASdf", String(50)),
+                insert_sentinel("sentinel"),
+            )
+
+    def test_no_sentinel_default_on_notnull(self):
+        with expect_raises_message(
+            exc.ArgumentError,
+            "The _InsertSentinelColumnDefault may only be applied to a "
+            "Column that is nullable",
+        ):
+            self.make_table_w_sentinel_col(
+                "sentinel",
+                Integer,
+                nullable=False,
+                insert_sentinel=True,
+                default=_InsertSentinelColumnDefault(),
+            )
+
+    def test_no_sentinel_default_on_non_sentinel(self):
+        with expect_raises_message(
+            exc.ArgumentError,
+            "The _InsertSentinelColumnDefault may only be applied to a "
+            "Column marked as insert_sentinel=True",
+        ):
+            self.make_table_w_sentinel_col(
+                "sentinel",
+                Integer,
+                default=_InsertSentinelColumnDefault(),
+            )

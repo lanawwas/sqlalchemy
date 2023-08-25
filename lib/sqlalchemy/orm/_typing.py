@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .decl_api import registry as _registry_type
     from .interfaces import InspectionAttr
     from .interfaces import MapperProperty
+    from .interfaces import ORMOption
     from .interfaces import UserDefinedOption
     from .mapper import Mapper
     from .relationships import RelationshipProperty
@@ -52,15 +53,8 @@ _T = TypeVar("_T", bound=Any)
 
 _T_co = TypeVar("_T_co", bound=Any, covariant=True)
 
-# I would have preferred this were bound=object however it seems
-# to not travel in all situations when defined in that way.
-_O = TypeVar("_O", bound=Any)
+_O = TypeVar("_O", bound=object)
 """The 'ORM mapped object' type.
-
-"""
-
-_OO = TypeVar("_OO", bound=object)
-"""The 'ORM mapped object, that's definitely object' type.
 
 """
 
@@ -120,6 +114,12 @@ class _ORMAdapterProto(Protocol):
 class _LoaderCallable(Protocol):
     def __call__(self, state: InstanceState[Any], passive: PassiveFlag) -> Any:
         ...
+
+
+def is_orm_option(
+    opt: ExecutableOption,
+) -> TypeGuard[ORMOption]:
+    return not opt._is_core  # type: ignore
 
 
 def is_user_defined_option(

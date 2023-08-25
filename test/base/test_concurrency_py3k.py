@@ -38,7 +38,6 @@ class TestAsyncioCompat(fixtures.TestBase):
 
     @async_test
     async def test_ok(self):
-
         eq_(await greenlet_spawn(go, run1, run2), 3)
 
     @async_test
@@ -95,7 +94,12 @@ class TestAsyncioCompat(fixtures.TestBase):
         ):
             await_only(to_await)
 
-        # ensure no warning
+        # existing awaitable is done
+        with expect_raises(RuntimeError):
+            await greenlet_spawn(await_fallback, to_await)
+
+        # no warning for a new one...
+        to_await = run1()
         await greenlet_spawn(await_fallback, to_await)
 
     @async_test
@@ -118,7 +122,8 @@ class TestAsyncioCompat(fixtures.TestBase):
         ):
             await greenlet_spawn(go)
 
-        await to_await
+        with expect_raises(RuntimeError):
+            await to_await
 
     @async_test
     async def test_await_only_error(self):
@@ -141,7 +146,8 @@ class TestAsyncioCompat(fixtures.TestBase):
         ):
             await greenlet_spawn(go)
 
-        await to_await
+        with expect_raises(RuntimeError):
+            await to_await
 
     @async_test
     async def test_contextvars(self):

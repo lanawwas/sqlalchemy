@@ -53,6 +53,12 @@ copybutton_prompt_text = (
 )
 copybutton_prompt_is_regexp = True
 
+# workaround
+# https://sphinx-copybutton-exclude-issue.readthedocs.io/en/v0.5.1-go/
+# https://github.com/executablebooks/sphinx-copybutton/issues/185
+# while we're at it, add our SQL css classes to also not be copied
+copybutton_exclude = ".linenos .show_sql .show_sql_print .popup_sql"
+
 nitpicky = False
 
 # The suffix of source filenames.
@@ -236,9 +242,9 @@ copyright = "2007-2023, the SQLAlchemy authors and contributors"  # noqa
 # The short X.Y version.
 version = "2.0"
 # The full version, including alpha/beta/rc tags.
-release = "2.0.0rc3"
+release = "2.0.20"
 
-release_date = "January 18, 2023"
+release_date = "August 15, 2023"
 
 site_base = os.environ.get("RTD_SITE_BASE", "https://www.sqlalchemy.org")
 site_adapter_template = "docs_adapter.mako"

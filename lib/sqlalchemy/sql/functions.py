@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import datetime
+import decimal
 from typing import Any
 from typing import cast
 from typing import Dict
@@ -54,7 +55,6 @@ from .elements import WithinGroup
 from .selectable import FromClause
 from .selectable import Select
 from .selectable import TableValuedAlias
-from .sqltypes import _N
 from .sqltypes import TableValueType
 from .type_api import TypeEngine
 from .visitors import InternalTraversal
@@ -99,6 +99,11 @@ def register_function(identifier, fn, package="_default"):
 
 class FunctionElement(Executable, ColumnElement[_T], FromClause, Generative):
     """Base for SQL function-oriented constructs.
+
+    This is a `generic type <https://peps.python.org/pep-0484/#generics>`_,
+    meaning that type checkers and IDEs can be instructed on the types to
+    expect in a :class:`_engine.Result` for this function. See
+    :class:`.GenericFunction` for an example of how this is done.
 
     .. seealso::
 
@@ -435,9 +440,6 @@ class FunctionElement(Executable, ColumnElement[_T], FromClause, Generative):
 
         See :func:`_expression.within_group` for a full description.
 
-        .. versionadded:: 1.1
-
-
         .. seealso::
 
             :ref:`tutorial_functions_within_group` -
@@ -461,8 +463,6 @@ class FunctionElement(Executable, ColumnElement[_T], FromClause, Generative):
 
             from sqlalchemy import funcfilter
             funcfilter(func.count(1), True)
-
-        .. versionadded:: 1.0.0
 
         .. seealso::
 
@@ -910,6 +910,154 @@ class _FunctionGenerator:
             self.__names[-1], packagenames=tuple(self.__names[0:-1]), *c, **o
         )
 
+    if TYPE_CHECKING:
+        # START GENERATED FUNCTION ACCESSORS
+
+        # code within this block is **programmatically,
+        # statically generated** by tools/generate_sql_functions.py
+
+        @property
+        def ansifunction(self) -> Type[AnsiFunction[Any]]:
+            ...
+
+        @property
+        def array_agg(self) -> Type[array_agg[Any]]:
+            ...
+
+        @property
+        def cast(self) -> Type[Cast[Any]]:
+            ...
+
+        @property
+        def char_length(self) -> Type[char_length]:
+            ...
+
+        @property
+        def coalesce(self) -> Type[coalesce[Any]]:
+            ...
+
+        @property
+        def concat(self) -> Type[concat]:
+            ...
+
+        @property
+        def count(self) -> Type[count]:
+            ...
+
+        @property
+        def cube(self) -> Type[cube[Any]]:
+            ...
+
+        @property
+        def cume_dist(self) -> Type[cume_dist]:
+            ...
+
+        @property
+        def current_date(self) -> Type[current_date]:
+            ...
+
+        @property
+        def current_time(self) -> Type[current_time]:
+            ...
+
+        @property
+        def current_timestamp(self) -> Type[current_timestamp]:
+            ...
+
+        @property
+        def current_user(self) -> Type[current_user]:
+            ...
+
+        @property
+        def dense_rank(self) -> Type[dense_rank]:
+            ...
+
+        @property
+        def extract(self) -> Type[Extract]:
+            ...
+
+        @property
+        def grouping_sets(self) -> Type[grouping_sets[Any]]:
+            ...
+
+        @property
+        def localtime(self) -> Type[localtime]:
+            ...
+
+        @property
+        def localtimestamp(self) -> Type[localtimestamp]:
+            ...
+
+        @property
+        def max(self) -> Type[max[Any]]:  # noqa: A001
+            ...
+
+        @property
+        def min(self) -> Type[min[Any]]:  # noqa: A001
+            ...
+
+        @property
+        def mode(self) -> Type[mode[Any]]:
+            ...
+
+        @property
+        def next_value(self) -> Type[next_value]:
+            ...
+
+        @property
+        def now(self) -> Type[now]:
+            ...
+
+        @property
+        def orderedsetagg(self) -> Type[OrderedSetAgg[Any]]:
+            ...
+
+        @property
+        def percent_rank(self) -> Type[percent_rank]:
+            ...
+
+        @property
+        def percentile_cont(self) -> Type[percentile_cont[Any]]:
+            ...
+
+        @property
+        def percentile_disc(self) -> Type[percentile_disc[Any]]:
+            ...
+
+        @property
+        def random(self) -> Type[random]:
+            ...
+
+        @property
+        def rank(self) -> Type[rank]:
+            ...
+
+        @property
+        def returntypefromargs(self) -> Type[ReturnTypeFromArgs[Any]]:
+            ...
+
+        @property
+        def rollup(self) -> Type[rollup[Any]]:
+            ...
+
+        @property
+        def session_user(self) -> Type[session_user]:
+            ...
+
+        @property
+        def sum(self) -> Type[sum[Any]]:  # noqa: A001
+            ...
+
+        @property
+        def sysdate(self) -> Type[sysdate]:
+            ...
+
+        @property
+        def user(self) -> Type[user]:
+            ...
+
+        # END GENERATED FUNCTION ACCESSORS
+
 
 func = _FunctionGenerator()
 func.__doc__ = _FunctionGenerator.__doc__
@@ -1099,6 +1247,19 @@ class GenericFunction(Function[_T]):
 
         >>> print(func.geo.buffer())
         {printsql}"ST_Buffer"()
+
+    Type parameters for this class as a
+    `generic type <https://peps.python.org/pep-0484/#generics>`_ can be passed
+    and should match the type seen in a :class:`_engine.Result`. For example::
+
+        class as_utc(GenericFunction[datetime.datetime]):
+            type = DateTime()
+            inherit_cache = True
+
+    The above indicates that the following expression returns a ``datetime``
+    object::
+
+        connection.scalar(select(func.as_utc()))
 
     .. versionadded:: 1.3.13  The :class:`.quoted_name` construct is now
        recognized for quoting when used with the "name" attribute of the
@@ -1420,8 +1581,6 @@ class array_agg(GenericFunction[_T]):
 
         stmt = select(func.array_agg(table.c.values)[2:5])
 
-    .. versionadded:: 1.1
-
     .. seealso::
 
         :func:`_postgresql.array_agg` - PostgreSQL-specific version that
@@ -1442,7 +1601,6 @@ class array_agg(GenericFunction[_T]):
 
         default_array_type = kwargs.pop("_default_array_type", sqltypes.ARRAY)
         if "type_" not in kwargs:
-
             type_from_args = _type_from_args(fn_args)
             if isinstance(type_from_args, sqltypes.ARRAY):
                 kwargs["type_"] = type_from_args
@@ -1479,8 +1637,6 @@ class mode(OrderedSetAgg[_T]):
 
     The return type of this function is the same as the sort expression.
 
-    .. versionadded:: 1.1
-
     """
 
     inherit_cache = True
@@ -1495,8 +1651,6 @@ class percentile_cont(OrderedSetAgg[_T]):
     The return type of this function is the same as the sort expression,
     or if the arguments are an array, an :class:`_types.ARRAY` of the sort
     expression's type.
-
-    .. versionadded:: 1.1
 
     """
 
@@ -1514,8 +1668,6 @@ class percentile_disc(OrderedSetAgg[_T]):
     or if the arguments are an array, an :class:`_types.ARRAY` of the sort
     expression's type.
 
-    .. versionadded:: 1.1
-
     """
 
     array_for_multi_clause = True
@@ -1529,8 +1681,6 @@ class rank(GenericFunction[int]):
     modifier to supply a sort expression to operate upon.
 
     The return type of this function is :class:`.Integer`.
-
-    .. versionadded:: 1.1
 
     """
 
@@ -1546,15 +1696,13 @@ class dense_rank(GenericFunction[int]):
 
     The return type of this function is :class:`.Integer`.
 
-    .. versionadded:: 1.1
-
     """
 
     type = sqltypes.Integer()
     inherit_cache = True
 
 
-class percent_rank(GenericFunction[_N]):
+class percent_rank(GenericFunction[decimal.Decimal]):
     """Implement the ``percent_rank`` hypothetical-set aggregate function.
 
     This function must be used with the :meth:`.FunctionElement.within_group`
@@ -1562,15 +1710,13 @@ class percent_rank(GenericFunction[_N]):
 
     The return type of this function is :class:`.Numeric`.
 
-    .. versionadded:: 1.1
-
     """
 
-    type: sqltypes.Numeric[_N] = sqltypes.Numeric()
+    type: sqltypes.Numeric[decimal.Decimal] = sqltypes.Numeric()
     inherit_cache = True
 
 
-class cume_dist(GenericFunction[_N]):
+class cume_dist(GenericFunction[decimal.Decimal]):
     """Implement the ``cume_dist`` hypothetical-set aggregate function.
 
     This function must be used with the :meth:`.FunctionElement.within_group`
@@ -1578,11 +1724,9 @@ class cume_dist(GenericFunction[_N]):
 
     The return type of this function is :class:`.Numeric`.
 
-    .. versionadded:: 1.1
-
     """
 
-    type: sqltypes.Numeric[_N] = sqltypes.Numeric()
+    type: sqltypes.Numeric[decimal.Decimal] = sqltypes.Numeric()
     inherit_cache = True
 
 

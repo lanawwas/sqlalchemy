@@ -2,7 +2,6 @@
     build-backend = "setuptools.build_meta"
     requires = [
         "setuptools>=47",
-        "wheel>=0.34",
         "cython>=0.29.24; python_implementation == 'CPython'", # Skip cython when using pypy
     ]
 
@@ -14,7 +13,13 @@ target-version = ['py37']
 black-line-length = 79
 
 [tool.slotscheck]
-exclude-modules = '^sqlalchemy\.testing'
+exclude-modules = '''
+^sqlalchemy\.(
+  testing
+  |ext\.mypy  # see slotscheck/issues/178
+)
+'''
+
 
 # disable isort, for IDEs that just default isort to be turned on, e.g. vscode.
 # we use flake8-import-order for import sorting, using zimports to actually
@@ -35,7 +40,11 @@ filterwarnings = [
     # here as pytest loads them immediately, which breaks coverage as well
     # as sys.path adjustments in conftest.py
     "error::DeprecationWarning:test",
-    "error::DeprecationWarning:sqlalchemy"
+    "error::DeprecationWarning:sqlalchemy",
+
+    # sqlite3 warnings due to test/dialect/test_sqlite.py->test_native_datetime,
+    # which is asserting that these deprecated-in-py312 handlers are functional
+    "ignore:The default (date)?(time)?(stamp)? (adapter|converter):DeprecationWarning",
 ]
 markers = [
     "memory_intensive: memory / CPU intensive suite tests",
@@ -71,7 +80,8 @@ strict = true
 
 [tool.cibuildwheel]
 test-requires = "pytest pytest-xdist"
-test-command = "pytest -c {project}/pyproject.toml -n2 -q --nomemory --notimingintensive --nomypy {project}/test"
+# remove user site, otherwise the local checkout has precedence, disabling cyextensions
+test-command = "python -s -m pytest -c {project}/pyproject.toml -n2 -q --nomemory --notimingintensive --nomypy {project}/test"
 
 build = "*"
 # python 3.6 is no longer supported by sqlalchemy

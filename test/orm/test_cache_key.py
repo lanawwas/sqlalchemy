@@ -2,6 +2,7 @@ import random
 
 import sqlalchemy as sa
 from sqlalchemy import Column
+from sqlalchemy import column
 from sqlalchemy import func
 from sqlalchemy import inspect
 from sqlalchemy import Integer
@@ -16,6 +17,7 @@ from sqlalchemy import true
 from sqlalchemy import update
 from sqlalchemy import util
 from sqlalchemy.ext.declarative import ConcreteBase
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm import Bundle
 from sqlalchemy.orm import defaultload
@@ -157,8 +159,6 @@ class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
     def test_loader_criteria(self):
         User, Address = self.classes("User", "Address")
 
-        from sqlalchemy import Column, Integer, String
-
         class Foo:
             id = Column(Integer)
             name = Column(String)
@@ -175,8 +175,6 @@ class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
         )
 
     def test_loader_criteria_bound_param_thing(self):
-        from sqlalchemy import Column, Integer
-
         class Foo:
             id = Column(Integer)
 
@@ -308,7 +306,6 @@ class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
         )
 
     def test_selects_w_orm_joins(self):
-
         User, Address, Keyword, Order, Item = self.classes(
             "User", "Address", "Keyword", "Order", "Item"
         )
@@ -340,7 +337,6 @@ class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
         )
 
     def test_orm_query_w_orm_joins(self):
-
         User, Address, Keyword, Order, Item = self.classes(
             "User", "Address", "Keyword", "Order", "Item"
         )
@@ -530,7 +526,6 @@ class CacheKeyTest(fixtures.CacheKeyFixture, _fixtures.FixtureTest):
         )
 
     def test_orm_query_basic(self):
-
         User, Address, Keyword, Order, Item = self.classes(
             "User", "Address", "Keyword", "Order", "Item"
         )
@@ -789,6 +784,55 @@ class PolyCacheKeyTest(fixtures.CacheKeyFixture, _poly_fixtures._Polymorphic):
             compare_values=True,
         )
 
+    @testing.variation(
+        "exprtype", ["plain_column", "self_standing_case", "case_w_columns"]
+    )
+    def test_hybrid_w_case_ac(self, decl_base, exprtype):
+        """test #9728"""
+
+        class Employees(decl_base):
+            __tablename__ = "employees"
+            id = Column(String(128), primary_key=True)
+            first_name = Column(String(length=64))
+
+            @hybrid_property
+            def name(self):
+                return self.first_name
+
+            @name.expression
+            def name(
+                cls,
+            ):
+                if exprtype.plain_column:
+                    return cls.first_name
+                elif exprtype.self_standing_case:
+                    return case(
+                        (column("x") == 1, column("q")),
+                        else_=column("q"),
+                    )
+                elif exprtype.case_w_columns:
+                    return case(
+                        (column("x") == 1, column("q")),
+                        else_=cls.first_name,
+                    )
+                else:
+                    exprtype.fail()
+
+        def go1():
+            employees_2 = aliased(Employees, name="employees_2")
+            stmt = select(employees_2.name)
+            return stmt
+
+        def go2():
+            employees_2 = aliased(Employees, name="employees_2")
+            stmt = select(employees_2)
+            return stmt
+
+        self._run_cache_key_fixture(
+            lambda: stmt_20(go1(), go2()),
+            compare_values=True,
+        )
+
 
 class RoundTripTest(QueryTest, AssertsCompiledSQL):
     __dialect__ = "default"
@@ -825,7 +869,6 @@ class RoundTripTest(QueryTest, AssertsCompiledSQL):
         return User, Address
 
     def test_subqueryload(self, plain_fixture):
-
         # subqueryload works pretty poorly w/ caching because it has
         # to create a new query.  previously, baked query went through a
         # bunch of hoops to improve upon this and they were found to be
@@ -898,7 +941,6 @@ class RoundTripTest(QueryTest, AssertsCompiledSQL):
         user_table = inspect(User).persist_selectable
 
         def go():
-
             my_thing = case((User.id > 9, 1), else_=2)
 
             # include entities in the statement so that we test that
@@ -1096,7 +1138,9 @@ class EmbeddedSubqTest(
         Base.registry.configure()
 
     @testing.combinations(
-        "tuples", ("memory", testing.requires.is64bit), argnames="assert_on"
+        "tuples",
+        ("memory", testing.requires.is64bit + testing.requires.cpython),
+        argnames="assert_on",
     )
     def test_cache_key_gen(self, assert_on):
         Employee = self.classes.Employee

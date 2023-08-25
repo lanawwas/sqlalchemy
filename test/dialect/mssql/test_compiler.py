@@ -20,12 +20,12 @@ from sqlalchemy import String
 from sqlalchemy import Table
 from sqlalchemy import testing
 from sqlalchemy import text
+from sqlalchemy import try_cast
 from sqlalchemy import union
 from sqlalchemy import UniqueConstraint
 from sqlalchemy import update
 from sqlalchemy.dialects import mssql
 from sqlalchemy.dialects.mssql import base as mssql_base
-from sqlalchemy.dialects.mssql.base import try_cast
 from sqlalchemy.sql import column
 from sqlalchemy.sql import quoted_name
 from sqlalchemy.sql import table
@@ -597,6 +597,47 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             checkparams={"param_1": "bar"},
             # if name_1 is included, too many parameters are passed to dbapi
             checkpositional=("bar",),
+        )
+
+    @testing.variation("use_schema_translate", [True, False])
+    @testing.combinations(
+        "abc", "has spaces", "[abc]", "[has spaces]", argnames="schemaname"
+    )
+    def test_schema_single_token_bracketed(
+        self, use_schema_translate, schemaname
+    ):
+        """test for #9133.
+
+        this is not the actual regression case for #9133, which is instead
+        within the reflection process.  However, when we implemented
+        #2626, we never considered the case of ``[schema]`` without any
+        dots in it.
+
+        """
+
+        schema_no_brackets = schemaname.strip("[]")
+
+        if " " in schemaname:
+            rendered_schema = "[%s]" % (schema_no_brackets,)
+        else:
+            rendered_schema = schema_no_brackets
+
+        metadata = MetaData()
+        tbl = Table(
+            "test",
+            metadata,
+            Column("id", Integer, primary_key=True),
+            schema=schemaname if not use_schema_translate else None,
+        )
+
+        self.assert_compile(
+            select(tbl),
+            "SELECT %(name)s.test.id FROM %(name)s.test"
+            % {"name": rendered_schema},
+            schema_translate_map={None: schemaname}
+            if use_schema_translate
+            else None,
+            render_schema_translate=True if use_schema_translate else False,
         )
 
     def test_schema_many_tokens_one(self):
@@ -1334,6 +1375,42 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             schema.CreateIndex(idx), "CREATE CLUSTERED INDEX foo ON test (id)"
         )
 
+    def test_index_empty(self):
+        metadata = MetaData()
+        idx = Index("foo")
+        Table("test", metadata, Column("id", Integer)).append_constraint(idx)
+        self.assert_compile(
+            schema.CreateIndex(idx), "CREATE INDEX foo ON test"
+        )
+
+    def test_index_colstore_clustering(self):
+        metadata = MetaData()
+        idx = Index("foo", mssql_clustered=True, mssql_columnstore=True)
+        Table("test", metadata, Column("id", Integer)).append_constraint(idx)
+        self.assert_compile(
+            schema.CreateIndex(idx),
+            "CREATE CLUSTERED COLUMNSTORE INDEX foo ON test",
+        )
+
+    def test_index_colstore_no_clustering(self):
+        metadata = MetaData()
+        tbl = Table("test", metadata, Column("id", Integer))
+        idx = Index(
+            "foo", tbl.c.id, mssql_clustered=False, mssql_columnstore=True
+        )
+        self.assert_compile(
+            schema.CreateIndex(idx),
+            "CREATE NONCLUSTERED COLUMNSTORE INDEX foo ON test (id)",
+        )
+
+    def test_index_not_colstore_clustering(self):
+        metadata = MetaData()
+        idx = Index("foo", mssql_clustered=True, mssql_columnstore=False)
+        Table("test", metadata, Column("id", Integer)).append_constraint(idx)
+        self.assert_compile(
+            schema.CreateIndex(idx), "CREATE CLUSTERED INDEX foo ON test"
+        )
+
     def test_index_where(self):
         metadata = MetaData()
         tbl = Table("test", metadata, Column("data", Integer))
@@ -1432,12 +1509,17 @@ class CompileTest(fixtures.TestBase, AssertsCompiledSQL):
             "CREATE INDEX foo ON test (x) INCLUDE (y) WHERE y > 1",
         )
 
-    def test_try_cast(self):
-        metadata = MetaData()
-        t1 = Table("t1", metadata, Column("id", Integer, primary_key=True))
+    @testing.variation("use_mssql_version", [True, False])
+    def test_try_cast(self, use_mssql_version):
+        t1 = Table("t1", MetaData(), Column("id", Integer, primary_key=True))
+
+        if use_mssql_version:
+            stmt = select(mssql.try_cast(t1.c.id, Integer))
+        else:
+            stmt = select(try_cast(t1.c.id, Integer))
 
         self.assert_compile(
-            select(try_cast(t1.c.id, Integer)),
+            stmt,
             "SELECT TRY_CAST (t1.id AS INTEGER) AS id FROM t1",
         )
 
